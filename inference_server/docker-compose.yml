@@ -1,0 +1,29 @@
+version: "3.8"
+
+services:
+  llm-inference-server:
+    image: vllm/vllm-openai:v0.8.5
+    container_name: llm-inference-server
+    restart: unless-stopped
+    ports:
+      - "5600:5600"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    ipc: host
+    volumes:
+      - "/mnt/c/Users/kkshr/Desktop/Работа/БГПБ/RAG/inference_server/models/Qwen2.5-1.5B-Instruct:/models/Qwen2.5-1.5B-Instruct"
+      - "/mnt/c/Users/kkshr/Desktop/Работа/БГПБ/RAG/inference_server/logs/vllm_docker.log:/logs/vllm_docker.log"
+    command:
+      - --served-model-name=Qwen2.5-1.5B-Instruct
+      - --model=/models/Qwen2.5-1.5B-Instruct
+      - --port=5600
+      - --dtype=half
+      - --gpu-memory-utilization=0.8
+      - --swap-space=8
+      - --max-model-len=4096
+      - --max-num-seqs=256
