@@ -1,31 +1,36 @@
-import json
 import torch
 from pathlib import Path
-from opensearchpy import OpenSearch
 from langchain.document_loaders import PyPDFLoader, UnstructuredWordDocumentLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from langchain_qdrant import QdrantVectorStore
+from qdrant_client import QdrantClient
+from qdrant_client.http.models import Distance, VectorParams
+from transformers import AutoModel, AutoTokenizer
 
-# Настройки OpenSearch
-OPENSEARCH_HOST = "http://localhost:9200"
-INDEX_NAME = "documents"
+# Настройки QDrant
+QDRANT_HOST = "http://localhost:6333"
+COLLECTION_NAME = "documents"
 
-# Подключение к OpenSearch
-client = OpenSearch(
-    hosts=[OPENSEARCH_HOST],
-    http_compress=True,
-    use_ssl=False,
-    verify_certs=False
+# Подключение к QDrant через LangChain
+client = QdrantClient(QDRANT_HOST)
+vector_store = QdrantVectorStore(
+    client=client,
+    collection_name=COLLECTION_NAME,
+    embedding_dimension=1024,
+    distance_metric=Distance.COSINE
 )
 
-# Создание индекса (если не существует)
-if not client.indices.exists(index=INDEX_NAME):
-    client.indices.create(index=INDEX_NAME, body={"settings": {"index": {"number_of_shards": 1}}})
+# Создание коллекции (если не существует)
+if not client.collection_exists(COLLECTION_NAME):
+    client.create_collection(
+        collection_name=COLLECTION_NAME,
+        vectors_config=VectorParams(size=1024, distance=Distance.COSINE)
+    )
 
-# Загрузка локальной модели Qwen2.5-1.5-Instruct
+# Загрузка локальной модели Qwen2.5-1.5-Instruct (PyTorch)
 MODEL_PATH = "models/Qwen2.5-1.5-Instruct"
 tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
-model = AutoModelForCausalLM.from_pretrained(MODEL_PATH)
+model = AutoModel.from_pretrained(MODEL_PATH)
 
 # Функция обработки PDF и DOCX
 def load_document(file_path):
@@ -44,7 +49,7 @@ def chunk_text(documents):
     splitter = RecursiveCharacterTextSplitter(chunk_size=512, chunk_overlap=50)
     return splitter.split_documents(documents)
 
-# Функция получения эмбеддингов
+# Функция получения эмбеддингов с PyTorch
 def get_embedding(text):
     inputs = tokenizer(text, return_tensors="pt", padding=True, truncation=True)
     with torch.no_grad():
@@ -62,7 +67,7 @@ def extract_keywords(text):
     keywords = tokenizer.decode(outputs[0], skip_special_tokens=True)
     return keywords.split(", ")
 
-# Функция загрузки документа в OpenSearch
+# Функция загрузки документа в QDrant
 def index_document(file_path, department):
     documents = load_document(file_path)
     chunks = chunk_text(documents)
@@ -71,23 +76,23 @@ def index_document(file_path, department):
         embedding = get_embedding(chunk.page_content)
         keywords = extract_keywords(chunk.page_content)
 
-        doc = {
-            "document_name": Path(file_path).name,
-            "document_link": str(file_path),
-            "department": department,
-            "chunk_id": i,
-            "text": chunk.page_content,
-            "embedding": embedding,
-            "keywords": keywords
-        }
-
-        client.index(index=INDEX_NAME, body=json.dumps(doc))
+        vector_store.add_texts(
+            texts=[chunk.page_content],
+            metadatas=[{
+                "document_name": Path(file_path).name,
+                "document_link": str(file_path),
+                "department": department,
+                "chunk_id": i,
+                "keywords": keywords
+            }],
+            embeddings=[embedding]
+        )
 
 # **Пример загрузки документов**
 index_document("example.pdf", "Финансовый отдел")
 index_document("example.docx", "Юридический отдел")
 
-print("Документы успешно загружены в OpenSearch!")
+print("Документы успешно загружены в QDrant через LangChain!")
 
 
 
