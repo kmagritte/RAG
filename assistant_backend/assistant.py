@@ -118,34 +118,30 @@ if __name__ == "__main__":
 
 
 
-from docling.document_converter import DocumentConverter
-from langchain.schema import Document as LC_Document
+from langchain_docling import DoclingLoader
+from langchain_docling.loader import ExportType
 from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.schema import Document
 
-def convert_with_docling(file_path: str, chunk_size=1000, chunk_overlap=200):
-    converter = DocumentConverter()
-    result = converter.convert(file_path)
+def load_structured_chunks(file_path: str, chunk_size=1000, chunk_overlap=200) -> list[Document]:
+    # Загружаем документ через DoclingLoader
+    loader = DoclingLoader(
+        file_path=file_path,
+        export_type=ExportType.DOC_CHUNKS  # сохраняет структуру документа
+    )
+    docs = loader.load()
 
-    md_blocks = result.document.get_flattened_blocks()  # плоский список всех блоков
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
-
+    # Разбиваем каждый блок на чанки с overlap
+    splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
     final_chunks = []
-    heading_stack = []
 
-    for block in md_blocks:
-        if block.is_heading():
-            level = int(block.attributes.get("level", 1))
-            heading_stack = heading_stack[:level - 1]  # обрезаем стек до текущего уровня
-            heading_stack.append(block.content.strip())
-        elif block.is_paragraph():
-            content = block.content.strip()
-            if content:
-                sub_docs = text_splitter.create_documents([content])
-                for sub_doc in sub_docs:
-                    full_text = f"{' → '.join(heading_stack)}\n\n{sub_doc.page_content}" if heading_stack else sub_doc.page_content
-                    final_chunks.append(LC_Document(
-                        page_content=full_text,
-                        metadata={"heading_path": heading_stack.copy(), "source": file_path}
-                    ))
+    for doc in docs:
+        heading_path = doc.metadata.get("heading_path", [])
+        chunks = splitter.create_documents([doc.page_content])
+        for chunk in chunks:
+            heading_prefix = " → ".join(heading_path)
+            chunk.page_content = f"{heading_prefix}\n\n{chunk.page_content}" if heading_prefix else chunk.page_content
+            chunk.metadata = {**doc.metadata, "heading_path": heading_path}
+            final_chunks.append(chunk)
+
     return final_chunks
-
