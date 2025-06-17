@@ -118,30 +118,21 @@ if __name__ == "__main__":
 
 
 
-from langchain_docling import DoclingLoader
-from langchain_docling.loader import ExportType
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.schema import Document
+def split_by_sections_flexible(documents):
+    section_docs = []
+    pattern = r"(?:\n|\A)([A-ZА-Я][^\n]{0,80}[\n:])"
 
-def load_structured_chunks(file_path: str, chunk_size=1000, chunk_overlap=200) -> list[Document]:
-    # Загружаем документ через DoclingLoader
-    loader = DoclingLoader(
-        file_path=file_path,
-        export_type=ExportType.DOC_CHUNKS  # сохраняет структуру документа
-    )
-    docs = loader.load()
+    for doc in documents:
+        parts = re.split(pattern, doc.page_content)
+        if len(parts) <= 1:
+            section_docs.append(doc)
+            continue
 
-    # Разбиваем каждый блок на чанки с overlap
-    splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
-    final_chunks = []
-
-    for doc in docs:
-        heading_path = doc.metadata.get("heading_path", [])
-        chunks = splitter.create_documents([doc.page_content])
-        for chunk in chunks:
-            heading_prefix = " → ".join(heading_path)
-            chunk.page_content = f"{heading_prefix}\n\n{chunk.page_content}" if heading_prefix else chunk.page_content
-            chunk.metadata = {**doc.metadata, "heading_path": heading_path}
-            final_chunks.append(chunk)
-
-    return final_chunks
+        for i in range(1, len(parts), 2):
+            title = parts[i].strip().replace('\n', ' ')
+            content = parts[i + 1].strip() if i + 1 < len(parts) else ""
+            section_docs.append(Document(
+                page_content=f"{title}\n{content}",
+                metadata={**doc.metadata, "section_title": title}
+            ))
+    return section_docs
