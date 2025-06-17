@@ -119,62 +119,79 @@ if __name__ == "__main__":
 
 
 import re
+from pathlib import Path
 from typing import List
 from langchain.schema import Document
 from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.document_loaders import PyPDFLoader, UnstructuredWordDocumentLoader
 
-def is_heading(text: str) -> bool:
-    """Определяет, является ли строка заголовком."""
+
+def detect_heading_level(text: str) -> int:
     text = text.strip()
-    if len(text.split()) > 15:
-        return False
-    if text.endswith("."):
-        return False
-    if not text or not text[0].isupper():
-        return False
-    # Пример: "1.1 Общие положения" или "Глава 2"
-    if re.match(r"^(\d+(\.\d+)*|[Гг]лава \d+)\s", text):
-        return True
-    return True
+    if re.match(r"^Глава\s+\d+", text):
+        return 1
+    elif re.match(r"^\d+(\.\d+)*\s+", text):  # 1.1, 2.3.4
+        return 2
+    elif re.match(r"^§\s*\d+(\.\d+)*", text):  # § 1.5
+        return 3
+    return 4  # обычный абзац
 
-def split_by_heading(raw_docs: List[Document], chunk_size=512, chunk_overlap=50) -> List[Document]:
-    """Разбивает документы по заголовкам и создает чанки с указанием заголовков."""
-    splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
-    all_chunks = []
 
-    for doc in raw_docs:
-        # Предобработка текста на уровне строк
+def load_document(file_path: str) -> List[Document]:
+    suffix = Path(file_path).suffix.lower()
+    if suffix == ".pdf":
+        loader = PyPDFLoader(file_path)
+    elif suffix == ".docx":
+        loader = UnstructuredWordDocumentLoader(file_path)
+    else:
+        raise ValueError("Поддерживаются только .pdf и .docx")
+    return loader.load()
+
+
+def split_document_with_headings(
+    docs: List[Document], chunk_size=1000, chunk_overlap=200
+) -> List[Document]:
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap
+    )
+    output_docs = []
+
+    for doc in docs:
         lines = doc.page_content.splitlines()
-        current_heading = None
-        current_buffer = []
+        heading_stack = []
+        buffer = []
+        buffer_len = 0
+
+        def flush_buffer():
+            nonlocal buffer, buffer_len
+            if not buffer:
+                return
+            full_section = "\n".join(buffer).strip()
+            sub_docs = text_splitter.create_documents([full_section])
+            for d in sub_docs:
+                heading_prefix = " → ".join(heading_stack)
+                d.page_content = f"{heading_prefix}\n\n{d.page_content}" if heading_prefix else d.page_content
+                d.metadata = {**doc.metadata, "heading_path": heading_stack.copy()}
+                output_docs.append(d)
+            buffer.clear()
+            buffer_len = 0
 
         for line in lines:
             line = line.strip()
             if not line:
                 continue
-
-            if is_heading(line):
-                if current_buffer:
-                    section_text = "\n".join(current_buffer).strip()
-                    chunks = splitter.create_documents([section_text])
-                    for chunk in chunks:
-                        chunk.page_content = f"{current_heading}\n\n{chunk.page_content}" if current_heading else chunk.page_content
-                        chunk.metadata = doc.metadata.copy()
-                        chunk.metadata["section_heading"] = current_heading
-                        all_chunks.append(chunk)
-                    current_buffer = []
-                current_heading = line
+            level = detect_heading_level(line)
+            if level < 4:
+                flush_buffer()
+                heading_stack = heading_stack[:level - 1]
+                heading_stack.append(line)
             else:
-                current_buffer.append(line)
+                buffer.append(line)
+                buffer_len += len(line)
+                if buffer_len >= chunk_size:
+                    flush_buffer()
 
-        # Последний раздел
-        if current_buffer:
-            section_text = "\n".join(current_buffer).strip()
-            chunks = splitter.create_documents([section_text])
-            for chunk in chunks:
-                chunk.page_content = f"{current_heading}\n\n{chunk.page_content}" if current_heading else chunk.page_content
-                chunk.metadata = doc.metadata.copy()
-                chunk.metadata["section_heading"] = current_heading
-                all_chunks.append(chunk)
+        flush_buffer()
 
-    return all_chunks
+    return output_docs
