@@ -118,21 +118,41 @@ if __name__ == "__main__":
 
 
 
-def split_by_sections_flexible(documents):
-    section_docs = []
-    pattern = r"(?:\n|\A)([A-ZА-Я][^\n]{0,80}[\n:])"
+from docling.pipeline.base_pipeline import BasePipeline
+from docling.datamodel.base_models import DocItem, InputFormat
 
-    for doc in documents:
-        parts = re.split(pattern, doc.page_content)
-        if len(parts) <= 1:
-            section_docs.append(doc)
-            continue
+class ParagraphHeaderPipeline(BasePipeline):
+    def parse_text(self, lines, filepath, fileformat=InputFormat.DOCX):
+        items = []
+        section_keywords = ("ГЛАВА", "СТАТЬЯ", "РАЗДЕЛ", "ЧАСТЬ", "SECTION", "PART")
 
-        for i in range(1, len(parts), 2):
-            title = parts[i].strip().replace('\n', ' ')
-            content = parts[i + 1].strip() if i + 1 < len(parts) else ""
-            section_docs.append(Document(
-                page_content=f"{title}\n{content}",
-                metadata={**doc.metadata, "section_title": title}
+        for line in lines:
+            text = line.strip()
+            if not text:
+                continue
+
+            line_upper = text.upper()
+            if any(line_upper.startswith(kw) for kw in section_keywords):
+                item_type = "heading"
+            else:
+                item_type = "paragraph"
+
+            items.append(DocItem(
+                type=item_type,
+                text=text
             ))
-    return section_docs
+
+        return items
+    
+
+from docling.document_converter import DocumentConverter
+from docling.datamodel.base_models import InputFormat
+from docling.document_converter import WordFormatOption
+
+converter = DocumentConverter(
+    format_options={
+        InputFormat.DOCX: WordFormatOption(
+            pipeline_cls=ParagraphHeaderPipeline
+        )
+    }
+)
